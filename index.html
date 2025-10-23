@@ -11,12 +11,28 @@
     <h1>Budget App</h1>
 
     <section class="card">
+      <h2>Accounts</h2>
+      <div class="row wrap">
+        <label class="select-group">
+          Current account
+          <select id="account-select"></select>
+        </label>
+        <div class="account-actions">
+          <input id="new-account-name" type="text" placeholder="New account name" />
+          <button id="create-account">Add Account</button>
+          <button id="delete-account" class="danger">Delete</button>
+        </div>
+      </div>
+      <p class="muted">Accounts only live while this page is open. Refreshing will clear everything.</p>
+    </section>
+
+    <section class="card">
       <h2>Starting Balance</h2>
       <div class="row">
         <input id="starting-balance" type="number" step="0.01" placeholder="Enter starting balance" />
         <button id="save-starting">Save</button>
       </div>
-      <p class="muted">Starting balance is stored in your browser (localStorage).</p>
+      <p class="muted">Each account keeps its own starting balance.</p>
     </section>
 
     <section class="card two-col">
@@ -73,24 +89,13 @@
 
     <section class="card">
       <h2>Ledger View (Daily)</h2>
-      <div class="row">
-        <label>
-          From
-          <input id="range-from" type="date" />
-        </label>
-        <label>
-          To
-          <input id="range-to" type="date" />
-        </label>
-        <button id="generate-ledger">Generate Ledger</button>
-      </div>
-      <p class="muted">Default range: today → 1 year ahead. You can shorten the range for faster rendering.</p>
+      <p class="muted">Showing balances from today through the next year. Updates automatically when you make changes.</p>
 
       <div id="ledger-container" class="ledger-container"></div>
     </section>
 
     <footer class="muted small">
-      Built for GitHub Pages. Data saved locally in your browser. To host: enable Pages on this repo and serve from the main branch root.
+      Built for GitHub Pages. Data lives only while the page is open.
     </footer>
   </main>
 
