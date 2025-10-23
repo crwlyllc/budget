@@ -26,6 +26,111 @@ const state = {
   currentAccountId: null
 };
 
+const STORAGE_KEY = 'budget-app-state';
+const canPersistState = typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+
+function cloneTransactions(transactions) {
+  return transactions.map((txn) => ({
+    id: txn.id,
+    type: txn.type,
+    name: txn.name,
+    amount: txn.amount,
+    startDate: txn.startDate,
+    frequency: txn.frequency
+  }));
+}
+
+function persistState() {
+  if (!canPersistState) return;
+
+  const payload = {
+    accounts: state.accountOrder.reduce((acc, id) => {
+      const account = state.accounts[id];
+      if (!account) return acc;
+      acc[id] = {
+        id: account.id,
+        name: account.name,
+        startingBalance: account.startingBalance,
+        transactions: cloneTransactions(account.transactions)
+      };
+      return acc;
+    }, {}),
+    accountOrder: [...state.accountOrder],
+    currentAccountId: state.currentAccountId
+  };
+
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+  } catch (error) {
+    console.warn('Failed to save budget data to storage', error);
+  }
+}
+
+function restoreState() {
+  if (!canPersistState) return null;
+
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== 'object') return null;
+
+    const accountOrder = Array.isArray(data.accountOrder)
+      ? data.accountOrder.filter((id) => typeof id === 'string')
+      : [];
+
+    const accounts = {};
+    accountOrder.forEach((id) => {
+      const account = data.accounts?.[id];
+      if (!account || typeof account !== 'object') return;
+
+      const startingBalance = Number.parseFloat(account.startingBalance);
+      const transactions = Array.isArray(account.transactions)
+        ? account.transactions
+            .map((txn) => {
+              if (!txn || typeof txn !== 'object') return null;
+              const amount = Number.parseFloat(txn.amount);
+              if (!Number.isFinite(amount)) return null;
+              const startDate = typeof txn.startDate === 'string' ? txn.startDate : '';
+              const name = typeof txn.name === 'string' ? txn.name.trim() : '';
+              const type = txn.type === 'expense' ? 'expense' : 'income';
+              const frequency = typeof txn.frequency === 'string' ? txn.frequency : 'single';
+              if (!name || !startDate) return null;
+              return {
+                id: typeof txn.id === 'string' && txn.id ? txn.id : createId(),
+                type,
+                name,
+                amount: Math.round(amount * 100) / 100,
+                startDate,
+                frequency
+              };
+            })
+            .filter(Boolean)
+        : [];
+
+      accounts[id] = {
+        id,
+        name: typeof account.name === 'string' && account.name.trim() ? account.name : 'Account',
+        startingBalance: Number.isFinite(startingBalance)
+          ? Math.round(startingBalance * 100) / 100
+          : 0,
+        transactions
+      };
+    });
+
+    const currentAccountId = accountOrder.includes(data.currentAccountId)
+      ? data.currentAccountId
+      : accountOrder[0] || null;
+
+    if (!accountOrder.length) return null;
+
+    return { accounts, accountOrder, currentAccountId };
+  } catch (error) {
+    console.warn('Failed to restore budget data from storage', error);
+    return null;
+  }
+}
+
 const els = {
   accountSelect: document.getElementById('account-select'),
   newAccountName: document.getElementById('new-account-name'),
@@ -163,6 +268,7 @@ function buildTransactionList(txns) {
         account.transactions = account.transactions.filter((t) => t.id !== txn.id);
         buildTransactionList(account.transactions);
         regenerateLedger();
+        persistState();
       });
       item.appendChild(removeBtn);
 
@@ -211,6 +317,7 @@ function setCurrentAccount(id) {
     els.startingInput.value = '';
     els.ledgerContainer.innerHTML = '<div class="empty-state">Create an account to view the ledger.</div>';
     renderAccountOptions();
+    persistState();
     return;
   }
 
@@ -223,17 +330,20 @@ function setCurrentAccount(id) {
     : '';
   buildTransactionList(account.transactions);
   regenerateLedger();
+  persistState();
 }
 
 function createAccount(name) {
   const id = createId();
+  const label = typeof name === 'string' ? name.trim() : '';
   state.accounts[id] = {
     id,
-    name,
+    name: label || `Account ${state.accountOrder.length + 1}`,
     startingBalance: 0,
     transactions: []
   };
   state.accountOrder.push(id);
+  persistState();
   return id;
 }
 
@@ -388,6 +498,7 @@ function initStartingBalance() {
     if (Number.isNaN(value)) return;
     account.startingBalance = Math.round(value * 100) / 100;
     regenerateLedger();
+    persistState();
   });
 }
 
@@ -420,6 +531,7 @@ function initTransactionForm() {
 
     buildTransactionList(account.transactions);
     regenerateLedger();
+    persistState();
   });
 }
 
@@ -471,13 +583,26 @@ function initAccountControls() {
     state.accountOrder = state.accountOrder.filter((id) => id !== idToRemove);
 
     const nextId = state.accountOrder[0] || null;
-    renderAccountOptions();
     setCurrentAccount(nextId);
   });
 
-  const defaultId = createAccount('Account 1');
-  renderAccountOptions();
-  setCurrentAccount(defaultId);
+  const restored = restoreState();
+  if (restored) {
+    state.accounts = restored.accounts;
+    state.accountOrder = restored.accountOrder;
+    state.currentAccountId = restored.currentAccountId;
+  }
+
+  if (!state.accountOrder.length) {
+    const defaultId = createAccount('Account 1');
+    state.currentAccountId = defaultId;
+  }
+
+  if (!state.currentAccountId && state.accountOrder.length) {
+    state.currentAccountId = state.accountOrder[0];
+  }
+
+  setCurrentAccount(state.currentAccountId);
 }
 
 function init() {
