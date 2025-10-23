@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Budget App — GitHub Pages</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="container">
+    <h1>Budget App</h1>
+
+    <section class="card">
+      <h2>Starting Balance</h2>
+      <div class="row">
+        <input id="starting-balance" type="number" step="0.01" placeholder="Enter starting balance" />
+        <button id="save-starting">Save</button>
+      </div>
+      <p class="muted">Starting balance is stored in your browser (localStorage).</p>
+    </section>
+
+    <section class="card two-col">
+      <div>
+        <h2>Add Transaction</h2>
+        <form id="txn-form">
+          <label>
+            Type
+            <select id="txn-type">
+              <option value="expense">Expense</option>
+              <option value="income">Income</option>
+            </select>
+          </label>
+
+          <label>
+            Name
+            <input id="txn-name" required placeholder="e.g., Rent, Paycheck" />
+          </label>
+
+          <label>
+            Amount
+            <input id="txn-amount" required type="number" step="0.01" min="0" placeholder="0.00" />
+          </label>
+
+          <label>
+            First Date
+            <input id="txn-date" type="date" required />
+          </label>
+
+          <label>
+            Frequency
+            <select id="txn-frequency">
+              <option value="single">One-time</option>
+              <option value="weekly">Weekly</option>
+              <option value="biweekly">Biweekly</option>
+              <option value="every14">Every 14 Days</option>
+              <option value="monthly">Monthly</option>
+              <option value="quarterly">Quarterly</option>
+              <option value="semiannual">Every 6 Months</option>
+              <option value="annual">Annually</option>
+            </select>
+          </label>
+
+          <div class="form-actions">
+            <button type="submit">Add Transaction</button>
+          </div>
+        </form>
+      </div>
+
+      <div>
+        <h2>Transactions</h2>
+        <div id="txn-list" class="txn-list"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Ledger View (Daily)</h2>
+      <div class="row">
+        <label>
+          From
+          <input id="range-from" type="date" />
+        </label>
+        <label>
+          To
+          <input id="range-to" type="date" />
+        </label>
+        <button id="generate-ledger">Generate Ledger</button>
+      </div>
+      <p class="muted">Default range: today → 1 year ahead. You can shorten the range for faster rendering.</p>
+
+      <div id="ledger-container" class="ledger-container"></div>
+    </section>
+
+    <footer class="muted small">
+      Built for GitHub Pages. Data saved locally in your browser. To host: enable Pages on this repo and serve from the main branch root.
+    </footer>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
