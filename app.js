@@ -1,8 +1,3 @@
-const STORAGE_KEYS = {
-  starting: 'budget-app-starting-balance',
-  transactions: 'budget-app-transactions'
-};
-
 const frequencySteps = {
   single: { type: 'single' },
   weekly: { days: 7 },
@@ -25,41 +20,23 @@ const frequencyLabels = {
   single: 'One-time'
 };
 
+const state = {
+  accounts: {},
+  accountOrder: [],
+  currentAccountId: null
+};
+
 const els = {
+  accountSelect: document.getElementById('account-select'),
+  newAccountName: document.getElementById('new-account-name'),
+  createAccountBtn: document.getElementById('create-account'),
+  deleteAccountBtn: document.getElementById('delete-account'),
   startingInput: document.getElementById('starting-balance'),
   saveStartingBtn: document.getElementById('save-starting'),
   txnForm: document.getElementById('txn-form'),
   txnList: document.getElementById('txn-list'),
-  rangeFrom: document.getElementById('range-from'),
-  rangeTo: document.getElementById('range-to'),
-  ledgerBtn: document.getElementById('generate-ledger'),
   ledgerContainer: document.getElementById('ledger-container')
 };
-
-function readStartingBalance() {
-  const stored = localStorage.getItem(STORAGE_KEYS.starting);
-  return stored ? parseFloat(stored) : 0;
-}
-
-function writeStartingBalance(value) {
-  localStorage.setItem(STORAGE_KEYS.starting, String(value));
-}
-
-function readTransactions() {
-  const raw = localStorage.getItem(STORAGE_KEYS.transactions);
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (err) {
-    console.error('Failed to parse transactions', err);
-    return [];
-  }
-}
-
-function writeTransactions(txns) {
-  localStorage.setItem(STORAGE_KEYS.transactions, JSON.stringify(txns));
-}
 
 function createId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -146,7 +123,7 @@ function buildTransactionList(txns) {
   }
 
   const fragment = document.createDocumentFragment();
-  txns
+  [...txns]
     .sort((a, b) => a.name.localeCompare(b.name))
     .forEach((txn) => {
       const item = document.createElement('div');
@@ -181,9 +158,10 @@ function buildTransactionList(txns) {
       removeBtn.type = 'button';
       removeBtn.textContent = 'Delete';
       removeBtn.addEventListener('click', () => {
-        const filtered = readTransactions().filter((t) => t.id !== txn.id);
-        writeTransactions(filtered);
-        buildTransactionList(filtered);
+        const account = getCurrentAccount();
+        if (!account) return;
+        account.transactions = account.transactions.filter((t) => t.id !== txn.id);
+        buildTransactionList(account.transactions);
         regenerateLedger();
       });
       item.appendChild(removeBtn);
@@ -198,6 +176,65 @@ function buildTransactionList(txns) {
 function capitalize(value) {
   if (!value) return '';
   return value.charAt(0).toUpperCase() + value.slice(1).replace(/([a-z])([A-Z])/g, '$1 $2');
+}
+
+function getCurrentAccount() {
+  if (!state.currentAccountId) return null;
+  return state.accounts[state.currentAccountId] || null;
+}
+
+function renderAccountOptions() {
+  const { accountSelect, deleteAccountBtn } = els;
+  accountSelect.innerHTML = '';
+
+  state.accountOrder.forEach((id) => {
+    const option = document.createElement('option');
+    option.value = id;
+    option.textContent = state.accounts[id].name;
+    accountSelect.appendChild(option);
+  });
+
+  const hasAccounts = state.accountOrder.length > 0;
+  accountSelect.disabled = !hasAccounts;
+
+  if (hasAccounts && state.currentAccountId) {
+    accountSelect.value = state.currentAccountId;
+  }
+
+  deleteAccountBtn.disabled = state.accountOrder.length <= 1;
+}
+
+function setCurrentAccount(id) {
+  if (!id || !state.accounts[id]) {
+    state.currentAccountId = null;
+    buildTransactionList([]);
+    els.startingInput.value = '';
+    els.ledgerContainer.innerHTML = '<div class="empty-state">Create an account to view the ledger.</div>';
+    renderAccountOptions();
+    return;
+  }
+
+  state.currentAccountId = id;
+  renderAccountOptions();
+
+  const account = getCurrentAccount();
+  els.startingInput.value = Number.isFinite(account.startingBalance)
+    ? String(account.startingBalance)
+    : '';
+  buildTransactionList(account.transactions);
+  regenerateLedger();
+}
+
+function createAccount(name) {
+  const id = createId();
+  state.accounts[id] = {
+    id,
+    name,
+    startingBalance: 0,
+    transactions: []
+  };
+  state.accountOrder.push(id);
+  return id;
 }
 
 function computeLedger(startDate, endDate, startingBalance, txns) {
@@ -262,7 +299,7 @@ function computeLedger(startDate, endDate, startingBalance, txns) {
 
 function renderLedgerTable(ledger) {
   if (!ledger.length) {
-    els.ledgerContainer.innerHTML = '<div class="empty-state">Adjust the date range and click "Generate Ledger" to view daily balances.</div>';
+    els.ledgerContainer.innerHTML = '<div class="empty-state">Add transactions to see daily balances here.</div>';
     return;
   }
 
@@ -344,17 +381,12 @@ function renderLedgerTable(ledger) {
 }
 
 function initStartingBalance() {
-  const stored = localStorage.getItem(STORAGE_KEYS.starting);
-  if (stored !== null) {
-    els.startingInput.value = stored;
-  }
-
   els.saveStartingBtn.addEventListener('click', () => {
+    const account = getCurrentAccount();
+    if (!account) return;
     const value = parseFloat(els.startingInput.value || '0');
     if (Number.isNaN(value)) return;
-    writeStartingBalance(value);
-    const txns = readTransactions();
-    buildTransactionList(txns);
+    account.startingBalance = Math.round(value * 100) / 100;
     regenerateLedger();
   });
 }
@@ -362,6 +394,8 @@ function initStartingBalance() {
 function initTransactionForm() {
   els.txnForm.addEventListener('submit', (event) => {
     event.preventDefault();
+    const account = getCurrentAccount();
+    if (!account) return;
     const formData = new FormData(els.txnForm);
     const txn = {
       id: createId(),
@@ -378,54 +412,78 @@ function initTransactionForm() {
 
     txn.amount = Number(txn.amount);
 
-    const txns = readTransactions();
-    txns.push(txn);
-    writeTransactions(txns);
+    account.transactions.push(txn);
 
     els.txnForm.reset();
     document.getElementById('txn-type').value = txn.type;
     document.getElementById('txn-frequency').value = txn.frequency;
 
-    buildTransactionList(txns);
+    buildTransactionList(account.transactions);
     regenerateLedger();
   });
 }
 
-function initLedgerControls() {
+function getLedgerRange() {
   const now = new Date();
-  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const oneYearLater = new Date(Date.UTC(now.getUTCFullYear() + 1, now.getUTCMonth(), now.getUTCDate()));
-  els.rangeFrom.value = toDateInputValue(today);
-  els.rangeTo.value = toDateInputValue(oneYearLater);
-
-  els.ledgerBtn.addEventListener('click', regenerateLedger);
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const end = new Date(Date.UTC(now.getUTCFullYear() + 1, now.getUTCMonth(), now.getUTCDate()));
+  return { start, end };
 }
 
 function regenerateLedger() {
-  const startValue = els.rangeFrom.value;
-  const endValue = els.rangeTo.value;
-  const now = new Date();
-  const defaultStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  const defaultEnd = new Date(Date.UTC(now.getUTCFullYear() + 1, now.getUTCMonth(), now.getUTCDate()));
-  const startDate = parseDateInput(startValue) || defaultStart;
-  const endDate = parseDateInput(endValue) || defaultEnd;
-  if (endDate < startDate) {
-    els.ledgerContainer.innerHTML = '<div class="empty-state">The end date must be after the start date.</div>';
+  const account = getCurrentAccount();
+  if (!account) {
+    els.ledgerContainer.innerHTML = '<div class="empty-state">Create an account to view the ledger.</div>';
     return;
   }
 
-  const startingBalance = readStartingBalance();
-  const txns = readTransactions();
-  const ledger = computeLedger(startDate, endDate, startingBalance, txns);
+  const hasData = (account.startingBalance && account.startingBalance !== 0) || account.transactions.length > 0;
+  if (!hasData) {
+    els.ledgerContainer.innerHTML = '<div class="empty-state">Add a starting balance or transactions to see the ledger.</div>';
+    return;
+  }
+
+  const { start, end } = getLedgerRange();
+  const ledger = computeLedger(start, end, account.startingBalance || 0, account.transactions);
   renderLedgerTable(ledger);
 }
 
+function initAccountControls() {
+  els.createAccountBtn.addEventListener('click', () => {
+    const name = (els.newAccountName.value || '').trim() || `Account ${state.accountOrder.length + 1}`;
+    const id = createAccount(name);
+    els.newAccountName.value = '';
+    setCurrentAccount(id);
+  });
+
+  els.accountSelect.addEventListener('change', (event) => {
+    const selectedId = event.target.value;
+    setCurrentAccount(selectedId);
+  });
+
+  els.deleteAccountBtn.addEventListener('click', () => {
+    if (state.accountOrder.length <= 1 || !state.currentAccountId) {
+      return;
+    }
+
+    const idToRemove = state.currentAccountId;
+    delete state.accounts[idToRemove];
+    state.accountOrder = state.accountOrder.filter((id) => id !== idToRemove);
+
+    const nextId = state.accountOrder[0] || null;
+    renderAccountOptions();
+    setCurrentAccount(nextId);
+  });
+
+  const defaultId = createAccount('Account 1');
+  renderAccountOptions();
+  setCurrentAccount(defaultId);
+}
+
 function init() {
+  initAccountControls();
   initStartingBalance();
   initTransactionForm();
-  initLedgerControls();
-  buildTransactionList(readTransactions());
-  regenerateLedger();
 }
 
 document.addEventListener('DOMContentLoaded', init);
