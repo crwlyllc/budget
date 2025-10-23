@@ -1,0 +1,9 @@
+{
+  "name": "budget-app",
+  "version": "1.0.0",
+  "description": "Budget tracking app with persistent server-side storage",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

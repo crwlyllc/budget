@@ -26,108 +26,110 @@ const state = {
   currentAccountId: null
 };
 
-const STORAGE_KEY = 'budget-app-state';
-const canPersistState = typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+const API_BASE = '/api';
 
-function cloneTransactions(transactions) {
-  return transactions.map((txn) => ({
-    id: txn.id,
-    type: txn.type,
-    name: txn.name,
-    amount: txn.amount,
-    startDate: txn.startDate,
-    frequency: txn.frequency
-  }));
-}
-
-function persistState() {
-  if (!canPersistState) return;
-
-  const payload = {
-    accounts: state.accountOrder.reduce((acc, id) => {
-      const account = state.accounts[id];
-      if (!account) return acc;
-      acc[id] = {
-        id: account.id,
-        name: account.name,
-        startingBalance: account.startingBalance,
-        transactions: cloneTransactions(account.transactions)
-      };
-      return acc;
-    }, {}),
-    accountOrder: [...state.accountOrder],
-    currentAccountId: state.currentAccountId
+async function api(path, options = {}) {
+  const { body, headers, method = 'GET', ...rest } = options;
+  const config = {
+    method,
+    headers: {
+      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+      ...(headers || {})
+    },
+    ...rest
   };
 
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-  } catch (error) {
-    console.warn('Failed to save budget data to storage', error);
+  if (body !== undefined) {
+    config.body = typeof body === 'string' ? body : JSON.stringify(body);
   }
+
+  const response = await fetch(`${API_BASE}${path}`, config);
+  const text = await response.text();
+  let payload = null;
+
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch (error) {
+      console.error('Failed to parse API response', error);
+      throw new Error('The server returned an unreadable response.');
+    }
+  }
+
+  if (!response.ok) {
+    const message = payload?.error || `Request failed with status ${response.status}`;
+    throw new Error(message);
+  }
+
+  return payload;
 }
 
-function restoreState() {
-  if (!canPersistState) return null;
-
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const data = JSON.parse(raw);
-    if (!data || typeof data !== 'object') return null;
-
-    const accountOrder = Array.isArray(data.accountOrder)
-      ? data.accountOrder.filter((id) => typeof id === 'string')
-      : [];
-
-    const accounts = {};
-    accountOrder.forEach((id) => {
-      const account = data.accounts?.[id];
-      if (!account || typeof account !== 'object') return;
-
-      const startingBalance = Number.parseFloat(account.startingBalance);
-      const transactions = Array.isArray(account.transactions)
-        ? account.transactions
-            .map((txn) => {
-              if (!txn || typeof txn !== 'object') return null;
-              const amount = Number.parseFloat(txn.amount);
-              if (!Number.isFinite(amount)) return null;
-              const startDate = typeof txn.startDate === 'string' ? txn.startDate : '';
-              const name = typeof txn.name === 'string' ? txn.name.trim() : '';
-              const type = txn.type === 'expense' ? 'expense' : 'income';
-              const frequency = typeof txn.frequency === 'string' ? txn.frequency : 'single';
-              if (!name || !startDate) return null;
-              return {
-                id: typeof txn.id === 'string' && txn.id ? txn.id : createId(),
-                type,
-                name,
-                amount: Math.round(amount * 100) / 100,
-                startDate,
-                frequency
-              };
-            })
-            .filter(Boolean)
-        : [];
-
-      accounts[id] = {
-        id,
-        name: typeof account.name === 'string' && account.name.trim() ? account.name : 'Account',
-        startingBalance: Number.isFinite(startingBalance)
-          ? Math.round(startingBalance * 100) / 100
-          : 0,
-        transactions
-      };
-    });
-
-    const currentAccountId = accountOrder.includes(data.currentAccountId)
-      ? data.currentAccountId
-      : accountOrder[0] || null;
-
-    if (!accountOrder.length) return null;
-
-    return { accounts, accountOrder, currentAccountId };
-  } catch (error) {
-    console.warn('Failed to restore budget data from storage', error);
+function normalizeTransaction(raw) {
+  if (!raw || typeof raw !== 'object') {
     return null;
+  }
+
+  const amount = Number.parseFloat(raw.amount);
+  const type = raw.type === 'expense' ? 'expense' : 'income';
+  const frequency = typeof raw.frequency === 'string' && raw.frequency ? raw.frequency : 'single';
+  const name = typeof raw.name === 'string' ? raw.name.trim() : '';
+  const startDate = typeof raw.startDate === 'string' ? raw.startDate : '';
+
+  if (!name || !startDate || !Number.isFinite(amount)) {
+    return null;
+  }
+
+  return {
+    id: typeof raw.id === 'string' && raw.id ? raw.id : createId(),
+    type,
+    name,
+    amount: Math.round(amount * 100) / 100,
+    startDate,
+    frequency
+  };
+}
+
+function normalizeAccount(raw) {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+
+  const id = typeof raw.id === 'string' && raw.id ? raw.id : createId();
+  const name = typeof raw.name === 'string' && raw.name.trim() ? raw.name.trim() : 'Account';
+  const starting = Number.parseFloat(raw.startingBalance);
+  const startingBalance = Number.isFinite(starting) ? Math.round(starting * 100) / 100 : 0;
+  const transactions = Array.isArray(raw.transactions)
+    ? raw.transactions.map((txn) => normalizeTransaction(txn)).filter(Boolean)
+    : [];
+
+  return {
+    id,
+    name,
+    startingBalance,
+    transactions
+  };
+}
+
+function applyAccountsToState(list = []) {
+  state.accounts = {};
+  state.accountOrder = [];
+
+  list.forEach((raw) => {
+    const account = normalizeAccount(raw);
+    if (!account) return;
+    state.accounts[account.id] = account;
+    state.accountOrder.push(account.id);
+  });
+}
+
+async function loadAccounts() {
+  try {
+    const response = await api('/accounts');
+    const accounts = Array.isArray(response?.accounts) ? response.accounts : [];
+    applyAccountsToState(accounts);
+  } catch (error) {
+    console.error('Failed to load accounts from the server.', error);
+    throw error;
   }
 }
 
@@ -262,13 +264,19 @@ function buildTransactionList(txns) {
       removeBtn.className = 'danger';
       removeBtn.type = 'button';
       removeBtn.textContent = 'Delete';
-      removeBtn.addEventListener('click', () => {
+      removeBtn.addEventListener('click', async () => {
         const account = getCurrentAccount();
         if (!account) return;
-        account.transactions = account.transactions.filter((t) => t.id !== txn.id);
-        buildTransactionList(account.transactions);
-        regenerateLedger();
-        persistState();
+
+        try {
+          await api(`/transactions/${txn.id}`, { method: 'DELETE' });
+          account.transactions = account.transactions.filter((t) => t.id !== txn.id);
+          buildTransactionList(account.transactions);
+          regenerateLedger();
+        } catch (error) {
+          console.error('Failed to delete transaction', error);
+          window.alert('Could not delete the transaction. Please try again.');
+        }
       });
       item.appendChild(removeBtn);
 
@@ -317,7 +325,6 @@ function setCurrentAccount(id) {
     els.startingInput.value = '';
     els.ledgerContainer.innerHTML = '<div class="empty-state">Create an account to view the ledger.</div>';
     renderAccountOptions();
-    persistState();
     return;
   }
 
@@ -330,21 +337,30 @@ function setCurrentAccount(id) {
     : '';
   buildTransactionList(account.transactions);
   regenerateLedger();
-  persistState();
 }
 
-function createAccount(name) {
-  const id = createId();
+async function createAccount(name) {
   const label = typeof name === 'string' ? name.trim() : '';
-  state.accounts[id] = {
-    id,
-    name: label || `Account ${state.accountOrder.length + 1}`,
-    startingBalance: 0,
-    transactions: []
-  };
-  state.accountOrder.push(id);
-  persistState();
-  return id;
+  const fallback = `Account ${state.accountOrder.length + 1}`;
+
+  try {
+    const response = await api('/accounts', {
+      method: 'POST',
+      body: { name: label || fallback }
+    });
+
+    const account = normalizeAccount(response?.account || response);
+    if (!account) {
+      throw new Error('Invalid account response from server');
+    }
+
+    state.accounts[account.id] = account;
+    state.accountOrder.push(account.id);
+    return account.id;
+  } catch (error) {
+    console.error('Failed to create account', error);
+    throw error;
+  }
 }
 
 function computeLedger(startDate, endDate, startingBalance, txns) {
@@ -491,47 +507,79 @@ function renderLedgerTable(ledger) {
 }
 
 function initStartingBalance() {
-  els.saveStartingBtn.addEventListener('click', () => {
+  els.saveStartingBtn.addEventListener('click', async () => {
     const account = getCurrentAccount();
     if (!account) return;
+
     const value = parseFloat(els.startingInput.value || '0');
     if (Number.isNaN(value)) return;
-    account.startingBalance = Math.round(value * 100) / 100;
-    regenerateLedger();
-    persistState();
+
+    const nextValue = Math.round(value * 100) / 100;
+
+    try {
+      await api(`/accounts/${account.id}`, {
+        method: 'PUT',
+        body: { startingBalance: nextValue }
+      });
+
+      account.startingBalance = nextValue;
+      els.startingInput.value = String(nextValue);
+      regenerateLedger();
+    } catch (error) {
+      console.error('Failed to save starting balance', error);
+      window.alert('Could not save the starting balance. Please try again.');
+    }
   });
 }
 
 function initTransactionForm() {
-  els.txnForm.addEventListener('submit', (event) => {
+  els.txnForm.addEventListener('submit', async (event) => {
     event.preventDefault();
     const account = getCurrentAccount();
     if (!account) return;
-    const formData = new FormData(els.txnForm);
-    const txn = {
-      id: createId(),
-      type: formData.get('txn-type') || document.getElementById('txn-type').value,
-      name: formData.get('txn-name')?.trim() || document.getElementById('txn-name').value.trim(),
-      amount: parseFloat(formData.get('txn-amount') || document.getElementById('txn-amount').value),
-      startDate: formData.get('txn-date') || document.getElementById('txn-date').value,
-      frequency: formData.get('txn-frequency') || document.getElementById('txn-frequency').value
-    };
 
-    if (!txn.name || Number.isNaN(txn.amount) || !txn.startDate) {
+    const formData = new FormData(els.txnForm);
+    const type = formData.get('txn-type') || document.getElementById('txn-type').value;
+    const name = formData.get('txn-name')?.trim() || document.getElementById('txn-name').value.trim();
+    const amountValue = parseFloat(formData.get('txn-amount') || document.getElementById('txn-amount').value);
+    const startDate = formData.get('txn-date') || document.getElementById('txn-date').value;
+    const frequency = formData.get('txn-frequency') || document.getElementById('txn-frequency').value;
+
+    if (!name || Number.isNaN(amountValue) || !startDate) {
       return;
     }
 
-    txn.amount = Number(txn.amount);
+    const payload = {
+      type,
+      name,
+      amount: Math.round(Number(amountValue) * 100) / 100,
+      startDate,
+      frequency
+    };
 
-    account.transactions.push(txn);
+    try {
+      const response = await api(`/accounts/${account.id}/transactions`, {
+        method: 'POST',
+        body: payload
+      });
 
-    els.txnForm.reset();
-    document.getElementById('txn-type').value = txn.type;
-    document.getElementById('txn-frequency').value = txn.frequency;
+      const saved = normalizeTransaction(response?.transaction || response);
+      if (!saved) {
+        throw new Error('Invalid transaction response from server');
+      }
 
-    buildTransactionList(account.transactions);
-    regenerateLedger();
-    persistState();
+      account.transactions.push(saved);
+
+      els.txnForm.reset();
+      document.getElementById('txn-type').value = payload.type;
+      document.getElementById('txn-frequency').value = payload.frequency;
+
+      buildTransactionList(account.transactions);
+      regenerateLedger();
+    } catch (error) {
+      console.error('Failed to add transaction', error);
+      window.alert('Could not add the transaction. Please try again.');
+    }
   });
 }
 
@@ -561,11 +609,16 @@ function regenerateLedger() {
 }
 
 function initAccountControls() {
-  els.createAccountBtn.addEventListener('click', () => {
-    const name = (els.newAccountName.value || '').trim() || `Account ${state.accountOrder.length + 1}`;
-    const id = createAccount(name);
-    els.newAccountName.value = '';
-    setCurrentAccount(id);
+  els.createAccountBtn.addEventListener('click', async () => {
+    const name = (els.newAccountName.value || '').trim();
+
+    try {
+      const id = await createAccount(name);
+      els.newAccountName.value = '';
+      setCurrentAccount(id);
+    } catch (error) {
+      window.alert('Could not create the account. Please try again.');
+    }
   });
 
   els.accountSelect.addEventListener('change', (event) => {
@@ -573,43 +626,75 @@ function initAccountControls() {
     setCurrentAccount(selectedId);
   });
 
-  els.deleteAccountBtn.addEventListener('click', () => {
+  els.deleteAccountBtn.addEventListener('click', async () => {
     if (state.accountOrder.length <= 1 || !state.currentAccountId) {
       return;
     }
 
     const idToRemove = state.currentAccountId;
-    delete state.accounts[idToRemove];
-    state.accountOrder = state.accountOrder.filter((id) => id !== idToRemove);
 
-    const nextId = state.accountOrder[0] || null;
-    setCurrentAccount(nextId);
+    try {
+      await api(`/accounts/${idToRemove}`, { method: 'DELETE' });
+      delete state.accounts[idToRemove];
+      state.accountOrder = state.accountOrder.filter((id) => id !== idToRemove);
+
+      const nextId = state.accountOrder[0] || null;
+      setCurrentAccount(nextId);
+    } catch (error) {
+      console.error('Failed to delete account', error);
+      window.alert('Could not delete the account. Please try again.');
+    }
   });
+}
 
-  const restored = restoreState();
-  if (restored) {
-    state.accounts = restored.accounts;
-    state.accountOrder = restored.accountOrder;
-    state.currentAccountId = restored.currentAccountId;
+async function hydrateInitialState() {
+  const previousId = state.currentAccountId;
+
+  try {
+    await loadAccounts();
+  } catch (error) {
+    window.alert('Unable to load budget data from the server. Please try again later.');
+    state.currentAccountId = null;
+    renderAccountOptions();
+    buildTransactionList([]);
+    els.ledgerContainer.innerHTML = '<div class="empty-state">Server data is unavailable right now.</div>';
+    return;
+  }
+
+  if (previousId && state.accounts[previousId]) {
+    state.currentAccountId = previousId;
   }
 
   if (!state.accountOrder.length) {
-    const defaultId = createAccount('Account 1');
-    state.currentAccountId = defaultId;
+    try {
+      const id = await createAccount('Account 1');
+      state.currentAccountId = id;
+    } catch (error) {
+      console.error('Failed to create default account', error);
+      window.alert('The app could not create a default account. Please try again.');
+      setCurrentAccount(null);
+      return;
+    }
   }
 
-  if (!state.currentAccountId && state.accountOrder.length) {
-    state.currentAccountId = state.accountOrder[0];
+  if (!state.currentAccountId || !state.accounts[state.currentAccountId]) {
+    state.currentAccountId = state.accountOrder[0] || null;
   }
 
   setCurrentAccount(state.currentAccountId);
 }
 
-function init() {
+async function init() {
   initAccountControls();
   initStartingBalance();
   initTransactionForm();
+  await hydrateInitialState();
 }
 
-document.addEventListener('DOMContentLoaded', init);
+document.addEventListener('DOMContentLoaded', () => {
+  init().catch((error) => {
+    console.error('Failed to initialise the budget app', error);
+    window.alert('Failed to start the budget app. Please refresh to try again.');
+  });
+});
 
